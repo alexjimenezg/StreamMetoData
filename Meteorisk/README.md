@@ -2,7 +2,7 @@
 
 ## 1. Descripción
 
-**Meteorisk** es un proyecto universitario que implementa un pipeline
+**Meteorisk** es un proyecto que implementa un pipeline
 end-to-end de procesamiento de datos meteorológicos en (cuasi) tiempo
 real.
 
