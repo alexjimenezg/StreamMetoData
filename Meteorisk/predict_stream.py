@@ -35,54 +35,22 @@ from pyspark.ml.feature import VectorAssembler
 from pyspark.ml.classification import RandomForestClassificationModel
 
 import config
+from utils.logging_config import setup_logging
+from utils.spark_utils import create_spark_session
+from utils.schema_registry import get_weather_schema, get_feature_columns
+
+logger = setup_logging(__name__)
 
 
-# ---------------------------------------------------------------------
-# Features (MISMO orden que train_model.py)
-# ---------------------------------------------------------------------
-FEATURE_COLUMNS = [
-    "temperature",
-    "humidity",
-    "precipitation",
-    "wind_speed",
-    "wind_gusts",
-    "surface_pressure",
-    "apparent_temperature",
-    "weather_code",
-]
+# Feature columns centralized in utils.schema_registry
+FEATURE_COLUMNS = get_feature_columns()
 
 
-# ---------------------------------------------------------------------
-# Spark Session
-# ---------------------------------------------------------------------
-def create_spark_session():
-    """Crea la SparkSession para la inferencia en streaming."""
-    spark = (
-        SparkSession.builder
-        .appName("MeteoriskPredictStream")
-        .getOrCreate()
-    )
-    spark.sparkContext.setLogLevel("WARN")
-    return spark
+# Spark session factory imported from utils
 
 
-# ---------------------------------------------------------------------
-# Schema del JSON publicado por producer.py
-# ---------------------------------------------------------------------
-def define_weather_schema():
-    """Mismo schema que streaming.py."""
-    return StructType([
-        StructField("city",                 StringType(),  True),
-        StructField("timestamp",            StringType(),  True),
-        StructField("temperature",          DoubleType(),  True),
-        StructField("humidity",             DoubleType(),  True),
-        StructField("precipitation",        DoubleType(),  True),
-        StructField("wind_speed",           DoubleType(),  True),
-        StructField("wind_gusts",           DoubleType(),  True),
-        StructField("surface_pressure",     DoubleType(),  True),
-        StructField("apparent_temperature", DoubleType(),  True),
-        StructField("weather_code",         IntegerType(), True),
-    ])
+# Weather schema centralized in utils.schema_registry
+SCHEMA = get_weather_schema()
 
 
 # ---------------------------------------------------------------------
@@ -104,11 +72,11 @@ def read_kafka_stream(spark):
 # ---------------------------------------------------------------------
 # Parseo
 # ---------------------------------------------------------------------
-def parse_weather_events(kafka_df, schema):
+def parse_weather_events(kafka_df):
     """Aplica from_json y castea timestamp."""
     parsed_df = (
         kafka_df
-        .select(from_json(col("json_str"), schema).alias("data"))
+        .select(from_json(col("json_str"), SCHEMA).alias("data"))
         .select("data.*")
     )
 
@@ -160,14 +128,14 @@ def load_model():
     Si no existe, devuelve None para que main() lo maneje.
     """
     if not os.path.isdir(config.MODEL_PATH):
-        print(f"[predict_stream] No se encontró el modelo en {config.MODEL_PATH}.")
-        print("  Ejecuta primero:  spark-submit train_model.py")
+        logger.error(f"No se encontró el modelo en {config.MODEL_PATH}.")
+        logger.error("  Ejecuta primero:  spark-submit train_model.py")
         return None
 
     try:
         return RandomForestClassificationModel.load(config.MODEL_PATH)
     except Exception as exc:
-        print(f"[predict_stream] Error al cargar el modelo: {exc}")
+        logger.error(f"Error al cargar el modelo: {exc}")
         return None
 
 
@@ -235,49 +203,53 @@ def start_predictions_parquet_query(predictions_df):
 # Main
 # ---------------------------------------------------------------------
 def main():
-    print("[predict_stream] Iniciando consumidor de predicciones...")
-    print(f"  Broker Kafka : {config.KAFKA_BOOTSTRAP_SERVERS}")
-    print(f"  Tópico       : {config.KAFKA_TOPIC}")
-    print(f"  Modelo       : {config.MODEL_PATH}")
-    print(f"  Predicciones : {config.DATA_PREDICTIONS_PATH}")
-
-    model = load_model()
-    if model is None:
-        sys.exit(1)
-    print(
-        f"[predict_stream] Modelo cargado "
-        f"(numClasses={model.numClasses}, numFeatures={model.numFeatures})."
-    )
-
-    spark = create_spark_session()
-    schema = define_weather_schema()
-
-    kafka_df = read_kafka_stream(spark)
-    parsed_df = parse_weather_events(kafka_df, schema)
-    clean_df = clean_weather_events(parsed_df)
-    feature_df = add_features(clean_df)
-    predictions_df = predict_risk(model, feature_df)
-
-    queries = [
-        start_console_query(predictions_df),
-        start_predictions_parquet_query(predictions_df),
-    ]
-
-    print(f"[predict_stream] {len(queries)} queries iniciadas. Esperando eventos... (Ctrl+C para salir)")
-
     try:
-        spark.streams.awaitAnyTermination()
-    except KeyboardInterrupt:
-        print("\n[predict_stream] Interrupción recibida. Deteniendo queries...")
-    finally:
-        for q in queries:
-            try:
-                if q.isActive:
-                    q.stop()
-            except Exception as exc:
-                print(f"[predict_stream] Error al detener una query: {exc}")
-        spark.stop()
-        print("[predict_stream] Spark detenido correctamente.")
+        logger.info("Iniciando consumidor de predicciones...")
+        logger.info(f"  Broker Kafka : {config.KAFKA_BOOTSTRAP_SERVERS}")
+        logger.info(f"  Tópico       : {config.KAFKA_TOPIC}")
+        logger.info(f"  Modelo       : {config.MODEL_PATH}")
+        logger.info(f"  Predicciones : {config.DATA_PREDICTIONS_PATH}")
+
+        model = load_model()
+        if model is None:
+            logger.error("No se pudo cargar el modelo. Abortando.")
+            sys.exit(1)
+        logger.info("Modelo cargado "
+            f"(numClasses={model.numClasses}, numFeatures={model.numFeatures})."
+        )
+
+        spark = create_spark_session("MeteoriskPredictStream")
+
+        kafka_df = read_kafka_stream(spark)
+        parsed_df = parse_weather_events(kafka_df)
+        clean_df = clean_weather_events(parsed_df)
+        feature_df = add_features(clean_df)
+        predictions_df = predict_risk(model, feature_df)
+
+        queries = [
+            start_console_query(predictions_df),
+            start_predictions_parquet_query(predictions_df),
+        ]
+
+        logger.info(f"{len(queries)} queries iniciadas. Esperando eventos... (Ctrl+C para salir)")
+
+        try:
+            spark.streams.awaitAnyTermination()
+        except KeyboardInterrupt:
+            logger.info("Interrupción recibida. Deteniendo queries...")
+        finally:
+            for q in queries:
+                try:
+                    if q.isActive:
+                        q.stop()
+                except Exception as exc:
+                    logger.error(f"Error al detener una query: {exc}")
+            spark.stop()
+            logger.info("Spark detenido correctamente.")
+    
+    except Exception as exc:
+        logger.exception(f"Error fatal: {exc}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

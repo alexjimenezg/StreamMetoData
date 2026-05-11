@@ -21,6 +21,9 @@ import plotly.express as px
 import streamlit as st
 
 import config
+from utils.logging_config import setup_logging
+
+logger = setup_logging(__name__)
 
 
 # ---------------------------------------------------------------------
@@ -41,24 +44,30 @@ def load_parquet_folder(path):
     (p. ej. archivo en escritura).
     """
     if not os.path.isdir(path):
+        logger.debug(f"Directorio no existe: {path}")
         return pd.DataFrame()
 
     try:
         df = pd.read_parquet(path)
+        logger.debug(f"Cargados {len(df)} registros de {path}")
+        return df
     except Exception as exc:
+        logger.error(f"Error al leer {path}: {exc}")
         st.sidebar.warning(f"Error al leer {path}: {exc}")
         return pd.DataFrame()
-
-    return df
 
 
 def load_model_metrics(path):
     """Carga el CSV de métricas del modelo. DataFrame vacío si no existe."""
     if not os.path.isfile(path):
+        logger.debug(f"Archivo de métricas no existe: {path}")
         return pd.DataFrame()
     try:
-        return pd.read_csv(path)
+        df = pd.read_csv(path)
+        logger.debug(f"Cargadas métricas de {path}")
+        return df
     except Exception as exc:
+        logger.error(f"Error al leer {path}: {exc}")
         st.sidebar.warning(f"Error al leer {path}: {exc}")
         return pd.DataFrame()
 
@@ -299,6 +308,7 @@ def show_model_metrics(metrics_df):
 # Main
 # ---------------------------------------------------------------------
 def main():
+    logger.info("Dashboard iniciado")
     st.set_page_config(
         page_title="Meteorisk Dashboard",
         layout="wide",
