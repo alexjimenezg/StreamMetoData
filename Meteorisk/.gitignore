@@ -1,0 +1,82 @@
+# ---------------------------------------------------------------
+# Python
+# ---------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ---------------------------------------------------------------
+# Entornos virtuales
+# ---------------------------------------------------------------
+venv/
+.venv/
+env/
+ENV/
+
+# ---------------------------------------------------------------
+# IDE / Editor
+# ---------------------------------------------------------------
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ---------------------------------------------------------------
+# Spark / streaming
+# ---------------------------------------------------------------
+spark-warehouse/
+metastore_db/
+derby.log
+*.crc
+_SUCCESS
+*.log
+
+# ---------------------------------------------------------------
+# Jupyter
+# ---------------------------------------------------------------
+.ipynb_checkpoints/
+
+# ---------------------------------------------------------------
+# Datos generados (mantener la carpeta, ignorar el contenido)
+# ---------------------------------------------------------------
+data/processed/*
+!data/processed/.gitkeep
+
+data/aggregates/*
+!data/aggregates/.gitkeep
+
+data/predictions/*
+!data/predictions/.gitkeep
+
+data/metrics/*
+!data/metrics/.gitkeep
+
+data/checkpoints/*
+!data/checkpoints/.gitkeep
+
+data/raw/*
+!data/raw/.gitkeep
+
+# ---------------------------------------------------------------
+# Modelos entrenados
+# ---------------------------------------------------------------
+models/weather_risk_model/
+models/*
+!models/.gitkeep
+
+# ---------------------------------------------------------------
+# Screenshots (conservar carpeta, ignorar PNG/JPG temporales)
+# ---------------------------------------------------------------
+screenshots/*
+!screenshots/.gitkeep

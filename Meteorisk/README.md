@@ -1,0 +1,462 @@
+# Meteorisk: Procesamiento y Clasificación de Riesgo Meteorológico en Tiempo Real con Kafka y Spark Structured Streaming
+
+## 1. Descripción
+
+**Meteorisk** es un proyecto universitario que implementa un pipeline
+end-to-end de procesamiento de datos meteorológicos en (cuasi) tiempo
+real.
+
+El sistema:
+
+- Obtiene datos meteorológicos de **Open-Meteo** para Ciudad de México.
+- Publica los eventos en un **tópico Kafka** (`weather_stream`),
+  simulando un stream continuo.
+- Consume el tópico con **Spark Structured Streaming**, limpia los
+  datos y calcula estadísticas por ventanas de tiempo.
+- Entrena un modelo supervisado con **Spark MLlib**
+  (`RandomForestClassifier`) para clasificar el **nivel de riesgo
+  meteorológico** (normal / moderate / critical).
+- Aplica el modelo en streaming a los nuevos eventos.
+- Visualiza datos, agregados, predicciones, alertas y métricas en un
+  **dashboard de Streamlit**.
+
+---
+
+## 2. Objetivo académico
+
+El proyecto demuestra de forma práctica:
+
+- **Ingestión de datos en tiempo real** con Apache Kafka.
+- **Procesamiento de streaming** con Spark Structured Streaming.
+- **Cálculo de estadísticas por ventana** (windowed aggregations).
+- **Almacenamiento en Parquet** como capa intermedia analítica.
+- **Entrenamiento de un modelo supervisado** con Spark MLlib.
+- **Predicción en streaming** integrando MLlib + Structured Streaming.
+- **Visualización interactiva** con Streamlit y Plotly.
+- **Comparación de arquitecturas**: ejecución **local** vs
+  **Google Colab**, midiendo tiempos y comportamiento del streaming.
+
+---
+
+## 3. Arquitectura general
+
+```
+            ┌──────────────────────┐
+            │   Open-Meteo API     │
+            └──────────┬───────────┘
+                       │
+                       ▼
+                 producer.py
+                       │
+                       ▼
+         Kafka topic: weather_stream
+                       │
+                       ▼
+                 streaming.py
+                       │
+              ┌────────┴────────┐
+              ▼                 ▼
+     data/processed/    data/aggregates/
+              │
+              ▼
+              train_model.py
+                       │
+                       ▼
+          models/weather_risk_model
+                       │
+                       ▼
+                 predict_stream.py
+                       │
+                       ▼
+                data/predictions/
+                       │
+                       ▼
+                  dashboard.py
+```
+
+---
+
+## 4. Estructura de carpetas
+
+```
+Meteorisk/
+├── producer.py            # Productor de eventos meteorológicos -> Kafka
+├── streaming.py           # Spark Structured Streaming: limpia + agrega + guarda Parquet
+├── train_model.py         # Entrenamiento del modelo de riesgo (Spark MLlib)
+├── predict_stream.py      # Inferencia en streaming sobre nuevos eventos
+├── dashboard.py           # Dashboard Streamlit + Plotly
+├── config.py              # Constantes globales (Kafka, rutas, ciudad, modelo)
+├── requirements.txt       # Dependencias Python del proyecto
+├── docker-compose.yml     # Kafka (bitnami/kafka, modo KRaft) en localhost:9092
+├── README.md              # Esta documentación
+├── data/
+│   ├── raw/               # (opcional) eventos crudos
+│   ├── processed/         # Eventos limpios (Parquet) - salida de streaming.py
+│   ├── aggregates/        # Estadísticas por ventana (Parquet) - salida de streaming.py
+│   ├── predictions/       # Predicciones (Parquet) - salida de predict_stream.py
+│   ├── metrics/           # Métricas del modelo (model_metrics.csv)
+│   └── checkpoints/       # Checkpoints de Spark Structured Streaming
+├── models/
+│   └── weather_risk_model/   # Modelo entrenado (formato MLlib)
+└── screenshots/           # Capturas para el informe final (Spark UI, dashboard)
+```
+
+---
+
+## 5. Requisitos
+
+- **Python 3.10+**
+- **Docker Desktop** (para levantar Kafka)
+- **Apache Spark / PySpark 3.5.x**
+- **Java 11 o 17** (requerido por Spark)
+- Librerías Python (incluidas en `requirements.txt`):
+  - `kafka-python`
+  - `requests`
+  - `pyspark`
+  - `pandas`
+  - `streamlit`
+  - `plotly`
+  - `pyarrow`
+
+> En Windows, PySpark requiere además `winutils.exe` para operaciones
+> de escritura en disco. Consulta la sección de Problemas Comunes.
+
+---
+
+## 6. Instalación
+
+Clona el repositorio y entra en la carpeta del proyecto:
+
+```bash
+cd Meteorisk
+```
+
+Crea y activa un entorno virtual:
+
+```bash
+# Crear el venv
+python -m venv venv
+
+# Activar en Windows (PowerShell o CMD)
+venv\Scripts\activate
+
+# Activar en Linux / Mac
+source venv/bin/activate
+```
+
+Instala las dependencias:
+
+```bash
+pip install -r requirements.txt
+```
+
+---
+
+## 7. Levantar Kafka
+
+Se incluye un `docker-compose.yml` con una instalación mínima de Kafka
+(`bitnami/kafka` en modo KRaft, sin Zookeeper).
+
+```bash
+docker compose up -d
+docker ps
+```
+
+Debe aparecer el contenedor **`meteorisk-kafka`** en estado `Up` con el
+puerto `9092` mapeado a `localhost`.
+
+Para validar que el tópico `weather_stream` está disponible:
+
+```bash
+docker exec -it meteorisk-kafka kafka-topics.sh \
+  --bootstrap-server localhost:9092 --list
+```
+
+Para detener Kafka cuando termines:
+
+```bash
+docker compose down
+```
+
+---
+
+## 8. Ejecución completa del pipeline
+
+Idealmente se utilizan **varias terminales** en paralelo. Cada una se
+mantiene corriendo mientras el pipeline está activo.
+
+**Terminal 1 — Kafka + productor**
+
+```bash
+docker compose up -d
+python producer.py
+```
+
+**Terminal 2 — Procesamiento con Spark Structured Streaming**
+
+```bash
+spark-submit --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0 streaming.py
+```
+
+**Terminal 3 — Entrenamiento del modelo**
+
+```bash
+spark-submit train_model.py
+```
+
+**Terminal 4 — Predicción en streaming**
+
+```bash
+spark-submit --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0 predict_stream.py
+```
+
+**Terminal 5 — Dashboard**
+
+```bash
+streamlit run dashboard.py
+```
+
+---
+
+## 9. Orden recomendado de ejecución
+
+1. **`docker compose up -d`** y **`python producer.py`** para empezar a
+   publicar eventos en Kafka.
+2. **`streaming.py`** para que Spark genere `data/processed/` y
+   `data/aggregates/`. Dejar correr unos minutos.
+3. **`train_model.py`** para entrenar el modelo y guardar
+   `models/weather_risk_model/` + `data/metrics/model_metrics.csv`.
+4. **`predict_stream.py`** para generar `data/predictions/`.
+5. **`streamlit run dashboard.py`** para visualizar todo.
+
+> Los pasos 2 y 4 pueden ejecutarse simultáneamente: usan distintos
+> checkpoints (`data/checkpoints/processed`, `.../aggregates`,
+> `.../predictions`) y no compiten entre sí.
+
+---
+
+## 10. Formato del evento JSON
+
+Cada mensaje enviado a Kafka tiene el siguiente formato:
+
+```json
+{
+  "city": "Mexico City",
+  "timestamp": "2026-05-10T14:00",
+  "temperature": 27.3,
+  "humidity": 65,
+  "precipitation": 0.0,
+  "wind_speed": 18.2,
+  "wind_gusts": 24.1,
+  "surface_pressure": 1015.4,
+  "apparent_temperature": 28.0,
+  "weather_code": 1
+}
+```
+
+---
+
+## 11. Variables meteorológicas
+
+| Variable               | Unidad   | Descripción                                                                  |
+| ---------------------- | -------- | ---------------------------------------------------------------------------- |
+| `temperature`          | °C       | Temperatura del aire a 2 m de altura.                                        |
+| `humidity`             | %        | Humedad relativa a 2 m.                                                      |
+| `precipitation`        | mm       | Precipitación acumulada en la hora.                                          |
+| `wind_speed`           | km/h     | Velocidad del viento a 10 m.                                                 |
+| `wind_gusts`           | km/h     | Ráfagas máximas de viento a 10 m.                                            |
+| `surface_pressure`     | hPa      | Presión atmosférica al nivel de la superficie.                               |
+| `apparent_temperature` | °C       | Sensación térmica (combina temperatura, humedad y viento).                   |
+| `weather_code`         | código   | Código WMO de condición meteorológica (ver documentación de Open-Meteo).     |
+| `city`, `timestamp`    | string   | Metadatos: ciudad y marca de tiempo de la observación.                        |
+
+---
+
+## 12. Clasificación de riesgo
+
+`train_model.py` deriva la variable objetivo **`risk_label`** con reglas
+simples (la regla `critical` tiene prioridad sobre `moderate`):
+
+- **`critical` = 2** si se cumple **alguna** de:
+  - `temperature > 35`
+  - `wind_speed > 60`
+  - `precipitation > 50`
+- **`moderate` = 1** si se cumple **alguna** de:
+  - `30 ≤ temperature ≤ 35`
+  - `20 ≤ precipitation ≤ 50`
+  - `40 ≤ wind_speed ≤ 60`
+- **`normal` = 0** en cualquier otro caso.
+
+Adicionalmente se crea `risk_level` (texto: `"normal"`, `"moderate"`,
+`"critical"`) para uso en consola y dashboard.
+
+> `producer.py` incluye un modo `DEMO_MODE=True` que inyecta anomalías
+> periódicas (temperatura 36.5, precipitación 55.0, viento 70.0) para
+> garantizar que existan casos moderados y críticos en los datos de
+> entrenamiento y en el dashboard.
+
+---
+
+## 13. Modelo de Machine Learning
+
+- **Algoritmo:** `RandomForestClassifier` de Spark MLlib.
+- **Hiperparámetros:** `numTrees=30`, `maxDepth=5`, `seed=42`.
+- **Split:** 80% entrenamiento / 20% prueba (`seed=42`).
+- **Métricas evaluadas:** `accuracy`, `weightedPrecision`,
+  `weightedRecall`, `f1` con `MulticlassClassificationEvaluator`.
+
+**Features** (orden importante, debe coincidir entre entrenamiento e
+inferencia):
+
+1. `temperature`
+2. `humidity`
+3. `precipitation`
+4. `wind_speed`
+5. `wind_gusts`
+6. `surface_pressure`
+7. `apparent_temperature`
+8. `weather_code`
+
+---
+
+## 14. Datos generados por el pipeline
+
+| Ruta                                   | Generado por         | Contenido                                                       |
+| -------------------------------------- | -------------------- | --------------------------------------------------------------- |
+| `data/processed/`                      | `streaming.py`       | Eventos meteorológicos limpios (Parquet).                       |
+| `data/aggregates/`                     | `streaming.py`       | Estadísticas por ventana de 1 min, con watermark (Parquet).     |
+| `data/predictions/`                    | `predict_stream.py`  | Eventos con predicción de riesgo (Parquet).                     |
+| `data/metrics/model_metrics.csv`       | `train_model.py`     | Métricas del modelo (`accuracy`, `f1`, etc.) en CSV.            |
+| `data/checkpoints/...`                 | streaming + predict  | Checkpoints de Spark Structured Streaming (no editar a mano).   |
+| `models/weather_risk_model/`           | `train_model.py`     | Modelo entrenado en formato MLlib (carpeta).                    |
+
+---
+
+## 15. Dashboard
+
+`dashboard.py` (Streamlit + Plotly) muestra:
+
+- **KPIs meteorológicos**: temperatura promedio, humedad promedio,
+  precipitación total, viento máximo, eventos totales.
+- **Alertas críticas**: banner rojo si en los datos recientes hay
+  `temperature > 35`, `wind_speed > 60`, `precipitation > 50` o el
+  modelo predice `critical`.
+- **Series temporales**: temperatura, humedad, precipitación, viento
+  vs. timestamp.
+- **Agregados por ventana**: `avg_temperature`, `total_precipitation`,
+  `max_wind_speed` vs. `window_start`.
+- **Predicciones**: distribución por `risk_prediction`
+  (normal/moderate/critical) y tabla con las últimas 20 predicciones.
+- **Métricas del modelo**: accuracy, weightedPrecision, weightedRecall,
+  f1, total_rows, clean_rows.
+- **Barra lateral**: estado de carga de cada fuente, botón de
+  refresco manual y checkbox de auto-refresh cada 10 segundos.
+
+Ejecución:
+
+```bash
+streamlit run dashboard.py
+```
+
+La app abre en `http://localhost:8501`.
+
+---
+
+## 16. Spark UI
+
+Mientras `streaming.py` o `predict_stream.py` están corriendo, Spark
+expone una interfaz web en:
+
+```
+http://localhost:4040
+```
+
+> Si hay más de una aplicación Spark activa, las siguientes usarán los
+> puertos `4041`, `4042`, etc.
+
+**Capturas recomendadas** (guardar en `screenshots/` para el informe):
+
+1. **Jobs** — listado de jobs y duración total.
+2. **Stages** — etapas y tiempo de cada una.
+3. **SQL / DataFrame** — plan físico de las queries.
+4. **Streaming Queries** — input rate, processing rate y batch duration.
+5. **Environment** — versión de Spark, Scala, Java y configuración.
+6. **Executors** — uso de memoria, GC y tareas por executor.
+
+---
+
+## 17. Métricas para comparar arquitecturas
+
+Completa la siguiente tabla con valores observados en cada arquitectura.
+**No inventes datos**: deja la celda vacía si no se midió.
+
+| Métrica            | Local | Google Colab | Comentario |
+| ------------------ | ----: | -----------: | ---------- |
+| Job duration       |       |              |            |
+| Executor Run Time  |       |              |            |
+| Scheduler Delay    |       |              |            |
+| Shuffle Read       |       |              |            |
+| Shuffle Write      |       |              |            |
+| Input Rate         |       |              |            |
+| Processing Rate    |       |              |            |
+| Batch Duration     |       |              |            |
+| Spill Memory/Disk  |       |              |            |
+
+---
+
+## 18. Comparación local vs Google Colab
+
+El mismo pipeline puede ejecutarse en dos arquitecturas distintas:
+
+- **Local**: PySpark sobre el equipo del estudiante (CPU/RAM
+  limitadas, Kafka en Docker, almacenamiento en disco local).
+- **Google Colab**: PySpark sobre un runtime de Colab (recursos
+  variables, sin Docker nativo para Kafka; se sustituye Kafka por
+  archivos o `kafka-python` con un broker externo).
+
+Para el informe se recomienda comparar:
+
+- **Hardware**: CPU, RAM, disco, GPU si aplica.
+- **Tiempos**: instalación de dependencias, arranque de Spark,
+  duración de cada job (`streaming`, `train`, `predict`).
+- **Comportamiento del streaming**: `input rate`, `processing rate`,
+  `batch duration`, retrasos del scheduler.
+- **Limitaciones**: timeouts de Colab, persistencia de datos, acceso a
+  Kafka.
+- **Conclusión**: en qué escenario conviene cada arquitectura para un
+  proyecto educativo o un piloto real.
+
+---
+
+## 19. Problemas comunes y soluciones
+
+| Problema                                                             | Causa probable                                                                       | Solución                                                                                                                            |
+| -------------------------------------------------------------------- | ------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------- |
+| **Kafka no levanta**                                                 | Docker no está corriendo o el puerto 9092 está ocupado.                              | Iniciar Docker Desktop, liberar el puerto 9092 o cambiarlo en `docker-compose.yml`. Volver a hacer `docker compose up -d`.          |
+| **`NoBrokersAvailable`** en `producer.py` / `streaming.py`           | Kafka aún no terminó de arrancar o el contenedor está detenido.                      | Esperar 10–20 s tras `docker compose up -d`; verificar con `docker ps`. Confirmar `localhost:9092`.                                 |
+| **`ClassNotFoundException: ...KafkaSourceProvider`**                 | Falta el paquete `spark-sql-kafka` al ejecutar streaming/predict.                    | Usar `spark-submit --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0 ...`. Ajustar la versión si tu PySpark no es 3.5.x.  |
+| **`data/processed/` vacío**                                          | `streaming.py` no llegó a hacer commit, o `producer.py` no está publicando.          | Dejar correr el productor y el streaming varios minutos. Verificar archivos `part-*.parquet` en la carpeta.                         |
+| **`data/aggregates/` vacío durante mucho tiempo**                    | Comportamiento esperado: watermark de 2 min + ventanas de 1 min en modo `append`.    | Esperar 5–10 minutos. La consola del streaming sí muestra los agregados de inmediato (modo `complete`).                             |
+| **`No se encontró el modelo en models/weather_risk_model`**          | `train_model.py` no se ejecutó, o se ejecutó en otra carpeta.                        | Ejecutar `spark-submit train_model.py` desde `Meteorisk/`. Comprobar que existe `models/weather_risk_model/` con `data/` y `metadata/`. |
+| **Dashboard sin datos** (todo en rojo en la sidebar)                 | Aún no se han generado los Parquet / CSV de origen.                                  | Ejecutar el pipeline en el orden recomendado y refrescar el dashboard con el botón "Actualizar datos".                              |
+| **`HADOOP_HOME and hadoop.home.dir are unset` (Windows)**            | PySpark en Windows necesita `winutils.exe` para escritura a disco.                   | Descargar `winutils.exe` compatible con tu versión de Hadoop, ubicarlo en `C:\hadoop\bin\` y exportar `HADOOP_HOME=C:\hadoop`.       |
+| **`ImportError: Missing optional dependency 'pyarrow'`** (dashboard) | Falta `pyarrow` en el entorno donde corre Streamlit.                                 | Activar el venv del proyecto antes de `streamlit run ...` y reinstalar `requirements.txt`.                                          |
+
+---
+
+## 20. Checklist final de entrega
+
+- [ ] `producer.py` envía eventos JSON al tópico `weather_stream`.
+- [ ] `streaming.py` genera Parquet en `data/processed/` y
+      `data/aggregates/`.
+- [ ] `train_model.py` guarda el modelo en
+      `models/weather_risk_model/` y las métricas en
+      `data/metrics/model_metrics.csv`.
+- [ ] `predict_stream.py` genera Parquet en `data/predictions/` con la
+      columna `risk_prediction`.
+- [ ] `dashboard.py` visualiza KPIs, gráficas, predicciones, alertas y
+      métricas del modelo.
+- [ ] Capturas de **Spark UI** guardadas en `screenshots/`
+      (Jobs, Stages, SQL/DataFrame, Streaming, Environment, Executors).
+- [ ] Tabla **Local vs Google Colab** completada con datos reales.
+- [ ] Informe final redactado en español.
