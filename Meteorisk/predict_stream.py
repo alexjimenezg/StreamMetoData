@@ -210,15 +210,16 @@ def main():
         logger.info(f"  Modelo       : {config.MODEL_PATH}")
         logger.info(f"  Predicciones : {config.DATA_PREDICTIONS_PATH}")
 
+        spark = create_spark_session("MeteoriskPredictStream")
+
         model = load_model()
         if model is None:
             logger.error("No se pudo cargar el modelo. Abortando.")
+            spark.stop()
             sys.exit(1)
         logger.info("Modelo cargado "
             f"(numClasses={model.numClasses}, numFeatures={model.numFeatures})."
         )
-
-        spark = create_spark_session("MeteoriskPredictStream")
 
         kafka_df = read_kafka_stream(spark)
         parsed_df = parse_weather_events(kafka_df)

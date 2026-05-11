@@ -17,6 +17,8 @@ Ejecución sugerida:
     spark-submit --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0 streaming.py
 """
 
+import os
+
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import (
     avg,
@@ -244,12 +246,16 @@ def main():
         stats_df = create_windowed_statistics(clean_df)
 
         # Cada query con su propio checkpoint -> sin conflictos.
+        # Las queries de consola son opcionales (CONSOLE_SINKS=true) porque
+        # bajo cargas altas saturan la salida y compiten con los sinks parquet.
+        enable_console = os.getenv("CONSOLE_SINKS", "false").lower() == "true"
         queries = [
-            start_console_query(clean_df),
             start_processed_parquet_query(clean_df),
-            start_aggregates_console_query(stats_df),
             start_aggregates_parquet_query(stats_df),
         ]
+        if enable_console:
+            queries.append(start_console_query(clean_df))
+            queries.append(start_aggregates_console_query(stats_df))
 
         logger.info(f"{len(queries)} queries iniciadas. Esperando eventos... (Ctrl+C para salir)")
 

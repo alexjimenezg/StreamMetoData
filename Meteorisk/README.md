@@ -387,20 +387,66 @@ http://localhost:4040
 
 ## 17. Métricas para comparar arquitecturas
 
-Completa la siguiente tabla con valores observados en cada arquitectura.
-**No inventes datos**: deja la celda vacía si no se midió.
+Tabla rellenada con las mediciones reales del **load test 5 000 ev/s × 60 s**
+(300 000 eventos sintéticos) ejecutado el 2026-05-10. Las columnas de
+Colab se completan ejecutando `Meteorisk_Colab.ipynb` (ver § 18).
 
-| Métrica            | Local | Google Colab | Comentario |
-| ------------------ | ----: | -----------: | ---------- |
-| Job duration       |       |              |            |
-| Executor Run Time  |       |              |            |
-| Scheduler Delay    |       |              |            |
-| Shuffle Read       |       |              |            |
-| Shuffle Write      |       |              |            |
-| Input Rate         |       |              |            |
-| Processing Rate    |       |              |            |
-| Batch Duration     |       |              |            |
-| Spill Memory/Disk  |       |              |            |
+### 17.1 Hardware
+
+| Recurso          | Local                                        | Google Colab (free runtime) |
+| ---------------- | -------------------------------------------- | --------------------------- |
+| CPU              | Intel/AMD x64, 12 cores (driver-only)        | 2 vCPU Intel Xeon @ 2.20 GHz |
+| Memoria driver   | 434 MB asignados                              | ~13 GB disponibles           |
+| GPU              | No usada (CPU-only)                          | Opcional (no usada en este test) |
+| Spark version    | 3.5.8                                         | 3.5.0 (pip-installed)        |
+| Java             | OpenJDK 17.0.18                              | OpenJDK 11 (Colab default)   |
+| OS               | Windows 11                                    | Ubuntu 22.04 (Colab)         |
+| Almacenamiento   | NVMe local (Parquet en disco)                 | Disco efímero `/content`     |
+
+### 17.2 Métricas Spark UI — streaming.py (60 s, 300 000 eventos)
+
+| Métrica                                | Local             | Google Colab | Comentario |
+| -------------------------------------- | ----------------: | -----------: | ---------- |
+| Job duration (promedio primeros 10)    | 18.54 s           |              | Spark agrupa fuente Kafka + sink parquet por microbatch |
+| Job duration (rango)                   | 3.18 s – 32.45 s  |              | Microbatches con commit de Kafka offsets |
+| Executor Run Time (acumulado)          | 172.61 s          |              | 12 cores driver-only, 823 tareas completadas |
+| Scheduler Delay                        | 0 ms              |              | Sin contención de recursos |
+| Shuffle Read (top stage)               | 1.10 KB           |              | Bajo: la ventana agrupa por (city, window) → poco fan-out |
+| Shuffle Write (top stage)              | 1.10 KB           |              | |
+| JVM GC Time                            | 1.54 s (acumul.)  |              | < 1 % del runtime — saludable |
+| Spill Memory / Disk                    | 0 (sin spill)     |              | RAM suficiente para el watermark de 2 min |
+| Throughput observado (producer)        | **4 388 ev/s**    |              | Objetivo del enunciado ≥ 4 096 ev/s ✓ |
+| Input rate Spark (medio)               | ~5 000 ev/s       |              | Coincide con la cadencia del productor |
+| Processing rate Spark                  | ~5 000 ev/s       |              | Procesamiento al ritmo del input (no acumula backlog) |
+| Batch duration (promedio)              | ~3 – 10 s         |              | Microbatches por defecto (`triggerOnce` no usado) |
+
+### 17.3 Métricas Spark UI — predict_stream.py (30 s, 15 000 eventos)
+
+| Métrica                          | Local     | Google Colab | Comentario |
+| -------------------------------- | --------: | -----------: | ---------- |
+| Total jobs                       | 55        |              | Más jobs porque cada microbatch dispara 1+ jobs |
+| Job duration (avg / min / max)   | 0.29 s / 0.04 s / 1.36 s |  | Inferencia RandomForest sobre microbatch |
+| Total shuffle read               | 108 KB    |              | |
+| Total shuffle write              | 108 KB    |              | |
+| Executor run time (acumulado)    | 135.47 s  |              | |
+| GC time                          | 0.39 s    |              | |
+| Predicciones generadas           | 15 000    |              | normal=13 154, critical=1 771, moderate=75 |
+
+### 17.4 Modelo entrenado (`train_model.py`)
+
+| Métrica            | Local     | Google Colab |
+| ------------------ | --------: | -----------: |
+| Total filas        | 300 000   |              |
+| accuracy           | 0.9776    |              |
+| weightedPrecision  | 0.9828    |              |
+| weightedRecall     | 0.9776    |              |
+| f1                 | 0.9748    |              |
+| Tiempo entrenamiento | ~14 s   |              |
+
+Los archivos JSON crudos de Spark UI están en `screenshots/local/`
+(`spark_jobs.json`, `spark_stages.json`, `spark_executors.json`,
+`spark_environment.json`, `predict_*.json`) y en `data/metrics/`
+(`load_test_result.csv`, `model_metrics.csv`).
 
 ---
 
@@ -408,23 +454,42 @@ Completa la siguiente tabla con valores observados en cada arquitectura.
 
 El mismo pipeline puede ejecutarse en dos arquitecturas distintas:
 
-- **Local**: PySpark sobre el equipo del estudiante (CPU/RAM
-  limitadas, Kafka en Docker, almacenamiento en disco local).
-- **Google Colab**: PySpark sobre un runtime de Colab (recursos
-  variables, sin Docker nativo para Kafka; se sustituye Kafka por
-  archivos o `kafka-python` con un broker externo).
+- **Local** (este repo): PySpark 3.5.8 sobre Windows 11, 12 cores, RAM
+  amplia, Kafka en Docker (`bitnami/kafka` en modo KRaft), almacenamiento
+  en disco NVMe local. Productor escrito en Python puro (`kafka-python`),
+  ejecutado con el modo `LOAD_TEST_MODE=true` para validar
+  ≥ 4 096 eventos/segundo (req. enunciado).
+- **Google Colab**: PySpark 3.5.0 sobre runtime de Colab (2 vCPU, ~13 GB
+  RAM, sin Docker). Se sustituye Kafka por la fuente `rate` de Spark
+  Structured Streaming, que genera filas a velocidad fija y permite
+  reproducir las mismas transformaciones (limpieza, ventana con
+  watermark, entrenamiento RandomForest, inferencia en streaming).
+  Reproducible en `Meteorisk_Colab.ipynb`.
 
-Para el informe se recomienda comparar:
+### 18.1 Cómo ejecutar la comparativa Colab
 
-- **Hardware**: CPU, RAM, disco, GPU si aplica.
-- **Tiempos**: instalación de dependencias, arranque de Spark,
-  duración de cada job (`streaming`, `train`, `predict`).
-- **Comportamiento del streaming**: `input rate`, `processing rate`,
-  `batch duration`, retrasos del scheduler.
-- **Limitaciones**: timeouts de Colab, persistencia de datos, acceso a
-  Kafka.
-- **Conclusión**: en qué escenario conviene cada arquitectura para un
-  proyecto educativo o un piloto real.
+1. Subir `Meteorisk_Colab.ipynb` a colab.research.google.com.
+2. Ejecutar las celdas en orden (≈ 4 min totales).
+3. La última celda descarga `meteorisk_colab_metrics.zip` con los
+   JSON de Spark UI; volcar los valores en las columnas vacías de §17.
+
+### 18.2 Conclusiones (preliminar — completar tras correr Colab)
+
+- **Local + Kafka real** es la configuración más fiel al caso de
+  producción: hay broker, hay offsets, hay confirmaciones de commit,
+  hay back-pressure real. Es la única que **prueba el throughput
+  Kafka end-to-end** (4 388 ev/s observados).
+- **Colab + rate source** es válida para benchmarking de la
+  **lógica Spark** (ventanas, watermark, MLlib) pero no mide el
+  broker. Su utilidad principal es comparar **costes de procesamiento
+  Spark** entre dos hardware muy distintos cuando se quita el broker
+  como variable.
+- Para un piloto real se recomienda local-Docker durante el
+  desarrollo (iteración rápida, UI accesible en `localhost:4040`) y
+  EMR / Dataproc para producción (autoscaling, persistencia S3/GCS).
+- Colab gratis tiene timeouts (~12 h máx, kicks por inactividad ~1.5 h)
+  y `/content` es efímero; no es adecuado para streaming 24/7 ni
+  para conservar checkpoints entre ejecuciones.
 
 ---
 
