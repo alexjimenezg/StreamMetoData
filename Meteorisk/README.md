@@ -398,7 +398,7 @@ exportados de la Spark UI en `Colab_Metrics/` (ver § 18).
 | ---------------- | -------------------------------------------- | ----------------------------------------- |
 | CPU              | Intel/AMD x64, 12 cores (driver-only)        | 2 vCPU (driver-only, `local[*]`)          |
 | Memoria driver   | 434 MB asignados                              | 434 MB asignados (`maxMemory` = 455 MB)   |
-| GPU              | No usada (CPU-only)                          | T4 disponible pero no usada (Spark CPU-only) |
+| GPU              | No usada (CPU-only)                          | GPU - T4 |
 | Spark version    | 3.5.8                                         | 3.5.0 (pip-installed)                     |
 | Java             | OpenJDK 17.0.18                              | OpenJDK 17.0.18 (Ubuntu)                  |
 | OS               | Windows 11                                    | Linux (Colab runtime, kernel 6.6.122+)    |
