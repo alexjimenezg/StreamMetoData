@@ -55,193 +55,174 @@ Important: in PowerShell use `;` between commands, not `&&`.
 - Evidence: producer -> Kafka -> Spark streaming -> Parquet -> model training works.
 - Remaining item to verify in this session: live prediction stream after training.
 
-## Exact commands
+## Exact commands by terminal (Windows PowerShell)
 
-Run everything from this folder:
+This section is copy/paste ready. Open **5 PowerShell terminals**.
+
+Important:
+- Run `cd C:\StreamMetoData\StreamMetoData\Meteorisk` in **every** terminal.
+- Keep Terminal 1, 2, and 3 running while you observe Spark UI.
+- Use `Ctrl+C` to stop long-running jobs.
+
+## Terminal map
+
+- **Terminal 1**: Kafka (Docker)
+- **Terminal 2**: Spark History Server (persistent Spark UI at `http://localhost:18080`)
+- **Terminal 3**: Spark Structured Streaming job (`streaming.py`)
+- **Terminal 4**: Producer (`producer.py`)
+- **Terminal 5**: Optional dashboard / training / prediction / tests
+
+## One-time setup (run once in any terminal)
 
 ```powershell
 cd C:\StreamMetoData\StreamMetoData\Meteorisk
-```
-
-### 1) One-time setup
-
-If the virtual environment is not ready yet:
-
-```powershell
 python -m venv venv
 venv\Scripts\python.exe -m pip install -r requirements.txt
+md data\spark_events
 ```
 
-Start Kafka:
+## Start everything for Spark UI (exact order)
+
+### Terminal 1 - start Kafka
 
 ```powershell
+cd C:\StreamMetoData\StreamMetoData\Meteorisk
 docker compose up -d
 docker compose ps
 ```
 
-**Optional: Start Spark History Server** (keeps UI accessible after jobs finish):
+Expected: Kafka container is `Up`.
 
-Create a directory for Spark event logs:
-
-```powershell
-md data\spark_events
-```
-
-Start the History Server in a separate terminal:
+### Terminal 2 - start Spark History Server
 
 ```powershell
+cd C:\StreamMetoData\StreamMetoData\Meteorisk
 spark-class org.apache.spark.deploy.history.HistoryServer --logDirectory "data\spark_events"
 ```
 
-The History Server will be available at `http://localhost:18080`. Then add this flag to all spark-submit commands:
+Keep this terminal open.
+
+### Terminal 3 - start Spark streaming (with event logging)
+
+```powershell
+cd C:\StreamMetoData\StreamMetoData\Meteorisk
+spark-submit --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0 --conf spark.eventLog.enabled=true --conf spark.eventLog.dir=data\spark_events C:\StreamMetoData\StreamMetoData\Meteorisk\streaming.py
+```
+
+Keep this terminal open.
+
+### Terminal 4 - start producer
+
+Normal mode:
+
+```powershell
+cd C:\StreamMetoData\StreamMetoData\Meteorisk
+venv\Scripts\python.exe producer.py
+```
+
+Load-test mode (better for Spark UI metrics):
+
+```powershell
+cd C:\StreamMetoData\StreamMetoData\Meteorisk
+$env:LOAD_TEST_MODE = "true"
+$env:LOAD_TEST_RATE = "5000"
+$env:LOAD_TEST_DURATION = "300"
+$env:LOAD_TEST_ANOMALY_PROB = "0.05"
+venv\Scripts\python.exe producer.py
+```
+
+Keep this terminal open while collecting metrics.
+
+## Exactly where to open Spark UI
+
+- **Live Spark UI (only while a Spark job is running):** `http://localhost:4040`
+- **Persistent Spark UI (recommended, remains after jobs finish):** `http://localhost:18080`
+
+If `http://localhost:4040` is not available, check Spark logs for another port like `4041`.
+
+## Terminal 5 - optional commands
+
+### Run model training (with History Server logging)
+
+```powershell
+cd C:\StreamMetoData\StreamMetoData\Meteorisk
+spark-submit --conf spark.eventLog.enabled=true --conf spark.eventLog.dir=data\spark_events C:\StreamMetoData\StreamMetoData\Meteorisk\train_model.py
+```
+
+### Run live prediction (with History Server logging)
+
+```powershell
+cd C:\StreamMetoData\StreamMetoData\Meteorisk
+spark-submit --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0 --conf spark.eventLog.enabled=true --conf spark.eventLog.dir=data\spark_events C:\StreamMetoData\StreamMetoData\Meteorisk\predict_stream.py
+```
+
+### Run dashboard
+
+```powershell
+cd C:\StreamMetoData\StreamMetoData\Meteorisk
+streamlit run C:\StreamMetoData\StreamMetoData\Meteorisk\dashboard.py
+```
+
+Dashboard URL: `http://localhost:8501`
+
+### Run tests
+
+```powershell
+cd C:\StreamMetoData\StreamMetoData\Meteorisk
+venv\Scripts\python.exe -m pytest tests\ -v
+```
+
+## Minimal mode (3 terminals, no History Server)
+
+Use this only if you want a quick run and do not need persistent UI.
+
+- Terminal 1:
+
+```powershell
+cd C:\StreamMetoData\StreamMetoData\Meteorisk
+docker compose up -d
+```
+
+- Terminal 2:
+
+```powershell
+cd C:\StreamMetoData\StreamMetoData\Meteorisk
+spark-submit --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0 C:\StreamMetoData\StreamMetoData\Meteorisk\streaming.py
+```
+
+- Terminal 3:
+
+```powershell
+cd C:\StreamMetoData\StreamMetoData\Meteorisk
+venv\Scripts\python.exe producer.py
+```
+
+Spark UI in this mode: `http://localhost:4040` only while job is running.
+
+## Stop commands (clean shutdown)
+
+1. In producer terminal: `Ctrl+C`
+2. In streaming terminal: `Ctrl+C`
+3. In History Server terminal: `Ctrl+C`
+4. In any terminal, stop Kafka:
+
+```powershell
+cd C:\StreamMetoData\StreamMetoData\Meteorisk
+docker compose down
+```
+
+## Spark UI quick checklist
+
+1. Start Terminal 2 (History Server).
+2. Run Spark jobs with both flags:
 
 ```powershell
 --conf spark.eventLog.enabled=true --conf spark.eventLog.dir=data\spark_events
 ```
 
-### 2) Generate data
-
-Normal near-real-time mode:
-
-```powershell
-venv\Scripts\python.exe producer.py
-```
-
-High-volume load test mode for Spark UI measurements:
-
-```powershell
-$env:LOAD_TEST_MODE = "true"
-$env:LOAD_TEST_RATE = "5000"
-$env:LOAD_TEST_DURATION = "60"
-$env:LOAD_TEST_ANOMALY_PROB = "0.05"
-venv\Scripts\python.exe producer.py
-```
-
-To stop the producer, press `Ctrl+C`.
-
-### 3) Run Spark Structured Streaming
-
-Use the Kafka package and the full file path. **With History Server** (add event logging):
-
-```powershell
-spark-submit --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0 --conf spark.eventLog.enabled=true --conf spark.eventLog.dir=data\spark_events C:\StreamMetoData\StreamMetoData\Meteorisk\streaming.py
-```
-
-**Without History Server** (simple, temporary UI):
-
-```powershell
-spark-submit --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0 C:\StreamMetoData\StreamMetoData\Meteorisk\streaming.py
-```
-
-While this job runs, open the **live Spark UI**:
-
-```text
-http://localhost:4040
-```
-
-This job will run continuously. Press `Ctrl+C` to stop it, but the UI will close immediately. If you ran with History Server enabled, the job will be archived and visible at `http://localhost:18080` even after it stops.
-
-### 4) Train the model
-
-**With History Server** (recommended for capturing metrics):
-
-```powershell
-spark-submit --conf spark.eventLog.enabled=true --conf spark.eventLog.dir=data\spark_events C:\StreamMetoData\StreamMetoData\Meteorisk\train_model.py
-```
-
-**Without History Server**:
-
-```powershell
-spark-submit C:\StreamMetoData\StreamMetoData\Meteorisk\train_model.py
-```
-
-This creates:
-
-- `models\weather_risk_model_<timestamp>`
-- `models\weather_risk_model`
-- `data\metrics\model_metrics.csv`
-
-After training finishes, the live UI at `http://localhost:4040` will close. But if History Server is running, view the completed job at `http://localhost:18080`.
-
-### 5) Run live prediction
-
-**With History Server**:
-
-```powershell
-spark-submit --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0 --conf spark.eventLog.enabled=true --conf spark.eventLog.dir=data\spark_events C:\StreamMetoData\StreamMetoData\Meteorisk\predict_stream.py
-```
-
-**Without History Server**:
-
-```powershell
-spark-submit --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0 C:\StreamMetoData\StreamMetoData\Meteorisk\predict_stream.py
-```
-
-This runs continuously until you press `Ctrl+C`. The live UI is available at `http://localhost:4040`.
-
-### 6) Run the dashboard
-
-```powershell
-streamlit run C:\StreamMetoData\StreamMetoData\Meteorisk\dashboard.py
-```
-
-The dashboard usually opens at:
-
-```text
-http://localhost:8501
-```
-
-### 7) Run tests
-
-Unit + integration tests:
-
-```powershell
-venv\Scripts\python.exe -m pytest tests\ -v
-```
-
-Unit only:
-
-```powershell
-venv\Scripts\python.exe -m pytest tests\unit -v
-```
-
-Integration only:
-
-```powershell
-venv\Scripts\python.exe -m pytest tests\integration -v
-```
-
-## UI Accessibility Guide
-
-For detailed instructions on keeping Spark UIs accessible in both local and Colab environments, see [SPARK_UI_GUIDE.md](SPARK_UI_GUIDE.md).
-
-**TL;DR:**
-- **Local:** Start Spark History Server (`spark-class org.apache.spark.deploy.history.HistoryServer --logDirectory "data\\spark_events"`), then use `--conf spark.eventLog.enabled=true --conf spark.eventLog.dir=data\\spark_events` flags.
-- **Colab:** Event logging enabled by default; metrics auto-extracted and downloaded as JSON.
-- **Access local UI:** http://localhost:18080 (after job completes with History Server)
-- **Access Colab metrics:** Download ZIP at end of notebook, extract JSON files.
-
-## UI Accessibility Guide
-
-### During job execution (live UI)
-
-- Open `http://localhost:4040` while a Spark job is running.
-- The UI shows **real-time** metrics: executors, tasks, stages, and shuffle activity.
-- This UI closes immediately when the job stops.
-
-### After job execution (History Server)
-
-- If you started the History Server (see section 1), the UI is at `http://localhost:18080`.
-- All completed jobs are preserved here even after they finish.
-- The History Server remains open until you stop it.
-- This is where you should capture screenshots for your report, because the data will not disappear.
-
-### How to keep the UI accessible
-
-1. **Start the History Server once** (in the setup section).
-2. **Add event logging flags** to your spark-submit commands (shown above).
-3. **Run your jobs** - each one will be logged and visible in the History Server.
-4. **Screenshot the History Server** at `http://localhost:18080` after jobs complete.
+3. Open `http://localhost:18080`.
+4. Click the finished application.
+5. Capture `Jobs`, `Stages`, and `Streaming` tabs.
 
 ## What to capture for the rubric
 
