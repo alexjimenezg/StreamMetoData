@@ -388,65 +388,84 @@ http://localhost:4040
 ## 17. Métricas para comparar arquitecturas
 
 Tabla rellenada con las mediciones reales del **load test 5 000 ev/s × 60 s**
-(300 000 eventos sintéticos) ejecutado el 2026-05-10. Las columnas de
-Colab se completan ejecutando `Meteorisk_Colab.ipynb` (ver § 18).
+(300 000 eventos sintéticos) ejecutado el 2026-05-10 en **Local**. La columna
+**Google Colab** se completó el 2026-05-11 a partir de los JSON crudos
+exportados de la Spark UI en `Colab_Metrics/` (ver § 18).
 
 ### 17.1 Hardware
 
-| Recurso          | Local                                        | Google Colab (free runtime) |
-| ---------------- | -------------------------------------------- | --------------------------- |
-| CPU              | Intel/AMD x64, 12 cores (driver-only)        | 2 vCPU Intel Xeon @ 2.20 GHz |
-| Memoria driver   | 434 MB asignados                              | ~13 GB disponibles           |
-| GPU              | No usada (CPU-only)                          | Opcional (no usada en este test) |
-| Spark version    | 3.5.8                                         | 3.5.0 (pip-installed)        |
-| Java             | OpenJDK 17.0.18                              | OpenJDK 11 (Colab default)   |
-| OS               | Windows 11                                    | Ubuntu 22.04 (Colab)         |
-| Almacenamiento   | NVMe local (Parquet en disco)                 | Disco efímero `/content`     |
+| Recurso          | Local                                        | Google Colab (free runtime)               |
+| ---------------- | -------------------------------------------- | ----------------------------------------- |
+| CPU              | Intel/AMD x64, 12 cores (driver-only)        | 2 vCPU (driver-only, `local[*]`)          |
+| Memoria driver   | 434 MB asignados                              | 434 MB asignados (`maxMemory` = 455 MB)   |
+| GPU              | No usada (CPU-only)                          | T4 disponible pero no usada (Spark CPU-only) |
+| Spark version    | 3.5.8                                         | 3.5.0 (pip-installed)                     |
+| Java             | OpenJDK 17.0.18                              | OpenJDK 17.0.18 (Ubuntu)                  |
+| OS               | Windows 11                                    | Linux (Colab runtime, kernel 6.6.122+)    |
+| Almacenamiento   | NVMe local (Parquet en disco)                 | Disco efímero `/content`                  |
 
-### 17.2 Métricas Spark UI — streaming.py (60 s, 300 000 eventos)
+### 17.2 Métricas Spark UI — streaming.py (≈60 s, ≈300 000 eventos)
 
-| Métrica                                | Local             | Google Colab | Comentario |
-| -------------------------------------- | ----------------: | -----------: | ---------- |
-| Job duration (promedio primeros 10)    | 18.54 s           |              | Spark agrupa fuente Kafka + sink parquet por microbatch |
-| Job duration (rango)                   | 3.18 s – 32.45 s  |              | Microbatches con commit de Kafka offsets |
-| Executor Run Time (acumulado)          | 172.61 s          |              | 12 cores driver-only, 823 tareas completadas |
-| Scheduler Delay                        | 0 ms              |              | Sin contención de recursos |
-| Shuffle Read (top stage)               | 1.10 KB           |              | Bajo: la ventana agrupa por (city, window) → poco fan-out |
-| Shuffle Write (top stage)              | 1.10 KB           |              | |
-| JVM GC Time                            | 1.54 s (acumul.)  |              | < 1 % del runtime — saludable |
-| Spill Memory / Disk                    | 0 (sin spill)     |              | RAM suficiente para el watermark de 2 min |
-| Throughput observado (producer)        | **4 388 ev/s**    |              | Objetivo del enunciado ≥ 4 096 ev/s ✓ |
-| Input rate Spark (medio)               | ~5 000 ev/s       |              | Coincide con la cadencia del productor |
-| Processing rate Spark                  | ~5 000 ev/s       |              | Procesamiento al ritmo del input (no acumula backlog) |
-| Batch duration (promedio)              | ~3 – 10 s         |              | Microbatches por defecto (`triggerOnce` no usado) |
+> En Colab la fuente es `rate` (no Kafka): se procesaron **290 000 eventos**
+> de salida en **57.22 s** repartidos en 86 microbatches (sinks `processed`
+> + `aggregates`), 120 stages, 435 tareas.
 
-### 17.3 Métricas Spark UI — predict_stream.py (30 s, 15 000 eventos)
+| Métrica                                | Local             | Google Colab      | Comentario |
+| -------------------------------------- | ----------------: | ----------------: | ---------- |
+| Job duration (promedio primeros 10)    | 18.54 s           | 1.45 s            | Colab tarda menos por microbatch porque la fuente `rate` no hace commit Kafka |
+| Job duration (rango)                   | 3.18 s – 32.45 s  | 0.11 s – 3.21 s   | Microbatches mucho más cortos en Colab (sin broker) |
+| Executor Run Time (acumulado)          | 172.61 s          | 58.63 s           | 2 cores en Colab vs 12 en Local: menos paralelismo → menos tiempo CPU acumulado |
+| Scheduler Delay                        | 0 ms              | 0 ms              | Sin contención de recursos en ambos |
+| Shuffle Read (top stage)               | 1.10 KB           | 0.74 KB           | Bajo: la ventana agrupa por (city, window) → poco fan-out |
+| Shuffle Write (top stage)              | 1.10 KB           | 0.74 KB           | Mismo comportamiento |
+| JVM GC Time                            | 1.54 s (acumul.)  | 1.36 s (acumul.)  | < 3 % del runtime — saludable en ambos |
+| Spill Memory / Disk                    | 0 (sin spill)     | 0 (sin spill)     | RAM suficiente para el watermark de 2 min |
+| Throughput observado (producer)        | **4 388 ev/s**    | n/a (sin Kafka)   | Local: ≥ 4 096 ev/s ✓. Colab no usa broker. |
+| Input rate Spark (medio)               | ~5 000 ev/s       | ~5 068 ev/s       | 290 000 ev / 57.22 s ≈ 5 068 ev/s |
+| Processing rate Spark                  | ~5 000 ev/s       | ~5 068 ev/s       | Procesamiento al ritmo del input (sin backlog) |
+| Batch duration (promedio)              | ~3 – 10 s         | ~0.6 s            | Microbatches mucho más rápidos sin el round-trip al broker |
 
-| Métrica                          | Local     | Google Colab | Comentario |
-| -------------------------------- | --------: | -----------: | ---------- |
-| Total jobs                       | 55        |              | Más jobs porque cada microbatch dispara 1+ jobs |
-| Job duration (avg / min / max)   | 0.29 s / 0.04 s / 1.36 s |  | Inferencia RandomForest sobre microbatch |
-| Total shuffle read               | 108 KB    |              | |
-| Total shuffle write              | 108 KB    |              | |
-| Executor run time (acumulado)    | 135.47 s  |              | |
-| GC time                          | 0.39 s    |              | |
-| Predicciones generadas           | 15 000    |              | normal=13 154, critical=1 771, moderate=75 |
+### 17.3 Métricas Spark UI — predict_stream.py (≈30 s, ≈15 000 eventos)
+
+> Colab: **30 microbatches** sobre **14 500 eventos** procesados en
+> **29.00 s** (30 stages, 59 tareas).
+
+| Métrica                          | Local                       | Google Colab                | Comentario |
+| -------------------------------- | --------------------------: | --------------------------: | ---------- |
+| Total jobs                       | 55                          | 30                          | Menos jobs en Colab: cada microbatch dispara 1 job (sin offset commit extra) |
+| Job duration (avg / min / max)   | 0.29 s / 0.04 s / 1.36 s    | 0.157 s / 0.111 s / 0.294 s | Inferencia RandomForest map-only, muy rápida |
+| Total shuffle read               | 108 KB                      | 0 B                         | En Colab la inferencia se mantiene map-only (sin reagrupación) |
+| Total shuffle write              | 108 KB                      | 0 B                         | Idem |
+| Executor run time (acumulado)    | 135.47 s                    | 4.31 s                      | 2 cores; trabajo realmente mínimo por microbatch |
+| GC time                          | 0.39 s                      | 0.20 s                      | |
+| Predicciones generadas           | 15 000 (normal=13 154, critical=1 771, moderate=75) | 14 500 (desglose por clase no exportado en JSON) | Distribución similar — depende del DEMO_MODE / rate source |
 
 ### 17.4 Modelo entrenado (`train_model.py`)
 
-| Métrica            | Local     | Google Colab |
-| ------------------ | --------: | -----------: |
-| Total filas        | 300 000   |              |
-| accuracy           | 0.9776    |              |
-| weightedPrecision  | 0.9828    |              |
-| weightedRecall     | 0.9776    |              |
-| f1                 | 0.9748    |              |
-| Tiempo entrenamiento | ~14 s   |              |
+| Métrica              | Local     | Google Colab |
+| -------------------- | --------: | -----------: |
+| Total filas          | 300 000   | 290 000      |
+| accuracy             | 0.9776    | 0.9754       |
+| weightedPrecision    | 0.9828    | 0.9762       |
+| weightedRecall       | 0.9776    | 0.9754       |
+| f1                   | 0.9748    | 0.9757       |
+| Tiempo entrenamiento | ~14 s     | 21.45 s      |
+
+> El entrenamiento en Colab es ~1.5× más lento que en Local (21.45 s vs
+> ~14 s, con 2 vCPU vs 12 cores) y mueve ~2.7 MB de shuffle entre las
+> 39 etapas del `RandomForestClassifier`. La **calidad del modelo es
+> equivalente** en ambas arquitecturas: accuracy 0.9776 (Local) vs
+> 0.9754 (Colab) y f1 0.9748 vs 0.9757 — diferencias < 0.3 pp,
+> atribuibles a la distribución del dataset generado por la fuente
+> `rate` frente al productor Kafka.
 
 Los archivos JSON crudos de Spark UI están en `screenshots/local/`
 (`spark_jobs.json`, `spark_stages.json`, `spark_executors.json`,
 `spark_environment.json`, `predict_*.json`) y en `data/metrics/`
-(`load_test_result.csv`, `model_metrics.csv`).
+(`load_test_result.csv`, `model_metrics.csv`). Los equivalentes de
+**Colab** están en `Colab_Metrics/` (`colab_spark_jobs.json`,
+`colab_spark_stages.json`, `colab_spark_executors.json`,
+`colab_spark_environment.json`, `model_metrics.csv`).
 
 ---
 

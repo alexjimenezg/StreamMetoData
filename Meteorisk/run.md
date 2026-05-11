@@ -79,6 +79,26 @@ docker compose up -d
 docker compose ps
 ```
 
+**Optional: Start Spark History Server** (keeps UI accessible after jobs finish):
+
+Create a directory for Spark event logs:
+
+```powershell
+md data\spark_events
+```
+
+Start the History Server in a separate terminal:
+
+```powershell
+spark-class org.apache.spark.deploy.history.HistoryServer --logDirectory "data\spark_events"
+```
+
+The History Server will be available at `http://localhost:18080`. Then add this flag to all spark-submit commands:
+
+```powershell
+--conf spark.eventLog.enabled=true --conf spark.eventLog.dir=data\spark_events
+```
+
 ### 2) Generate data
 
 Normal near-real-time mode:
@@ -101,19 +121,35 @@ To stop the producer, press `Ctrl+C`.
 
 ### 3) Run Spark Structured Streaming
 
-Use the Kafka package and the full file path:
+Use the Kafka package and the full file path. **With History Server** (add event logging):
+
+```powershell
+spark-submit --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0 --conf spark.eventLog.enabled=true --conf spark.eventLog.dir=data\spark_events C:\StreamMetoData\StreamMetoData\Meteorisk\streaming.py
+```
+
+**Without History Server** (simple, temporary UI):
 
 ```powershell
 spark-submit --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0 C:\StreamMetoData\StreamMetoData\Meteorisk\streaming.py
 ```
 
-While this job runs, open Spark UI:
+While this job runs, open the **live Spark UI**:
 
 ```text
 http://localhost:4040
 ```
 
+This job will run continuously. Press `Ctrl+C` to stop it, but the UI will close immediately. If you ran with History Server enabled, the job will be archived and visible at `http://localhost:18080` even after it stops.
+
 ### 4) Train the model
+
+**With History Server** (recommended for capturing metrics):
+
+```powershell
+spark-submit --conf spark.eventLog.enabled=true --conf spark.eventLog.dir=data\spark_events C:\StreamMetoData\StreamMetoData\Meteorisk\train_model.py
+```
+
+**Without History Server**:
 
 ```powershell
 spark-submit C:\StreamMetoData\StreamMetoData\Meteorisk\train_model.py
@@ -125,11 +161,23 @@ This creates:
 - `models\weather_risk_model`
 - `data\metrics\model_metrics.csv`
 
+After training finishes, the live UI at `http://localhost:4040` will close. But if History Server is running, view the completed job at `http://localhost:18080`.
+
 ### 5) Run live prediction
+
+**With History Server**:
+
+```powershell
+spark-submit --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0 --conf spark.eventLog.enabled=true --conf spark.eventLog.dir=data\spark_events C:\StreamMetoData\StreamMetoData\Meteorisk\predict_stream.py
+```
+
+**Without History Server**:
 
 ```powershell
 spark-submit --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0 C:\StreamMetoData\StreamMetoData\Meteorisk\predict_stream.py
 ```
+
+This runs continuously until you press `Ctrl+C`. The live UI is available at `http://localhost:4040`.
 
 ### 6) Run the dashboard
 
@@ -163,16 +211,53 @@ Integration only:
 venv\Scripts\python.exe -m pytest tests\integration -v
 ```
 
+## UI Accessibility Guide
+
+For detailed instructions on keeping Spark UIs accessible in both local and Colab environments, see [SPARK_UI_GUIDE.md](SPARK_UI_GUIDE.md).
+
+**TL;DR:**
+- **Local:** Start Spark History Server (`spark-class org.apache.spark.deploy.history.HistoryServer --logDirectory "data\\spark_events"`), then use `--conf spark.eventLog.enabled=true --conf spark.eventLog.dir=data\\spark_events` flags.
+- **Colab:** Event logging enabled by default; metrics auto-extracted and downloaded as JSON.
+- **Access local UI:** http://localhost:18080 (after job completes with History Server)
+- **Access Colab metrics:** Download ZIP at end of notebook, extract JSON files.
+
+## UI Accessibility Guide
+
+### During job execution (live UI)
+
+- Open `http://localhost:4040` while a Spark job is running.
+- The UI shows **real-time** metrics: executors, tasks, stages, and shuffle activity.
+- This UI closes immediately when the job stops.
+
+### After job execution (History Server)
+
+- If you started the History Server (see section 1), the UI is at `http://localhost:18080`.
+- All completed jobs are preserved here even after they finish.
+- The History Server remains open until you stop it.
+- This is where you should capture screenshots for your report, because the data will not disappear.
+
+### How to keep the UI accessible
+
+1. **Start the History Server once** (in the setup section).
+2. **Add event logging flags** to your spark-submit commands (shown above).
+3. **Run your jobs** - each one will be logged and visible in the History Server.
+4. **Screenshot the History Server** at `http://localhost:18080` after jobs complete.
+
 ## What to capture for the rubric
 
-### Spark UI screenshots
+### Spark UI screenshots (via History Server)
 
-Capture these while `streaming.py` or `predict_stream.py` is running:
+After each job finishes, go to `http://localhost:18080`, click the completed job, and capture:
 
-- `Jobs` tab: total execution time.
-- `Stages` tab: shuffle read/write, scheduler delay, spill, and stage duration.
-- `SQL` tab: query duration and execution breakdown.
-- `Streaming` tab: input rate, processing rate, batch duration, and queue backlog if present.
+- `Jobs` tab: total execution time for the job.
+- `Stages` tab: shuffle read/write bytes, scheduler delay, spill to disk, and stage duration.
+- `SQL` tab (if applicable): query duration and execution breakdown.
+- `Streaming` tab: input rate (events/sec), processing rate, batch duration, and queue backlog if present.
+
+**Tips for screenshots:**
+- Use the History Server URL because the data persists.
+- Run your jobs with the event logging flags enabled.
+- Capture at least 3–5 batches or stages to get meaningful averages.
 
 ### Comparison table for the report
 
