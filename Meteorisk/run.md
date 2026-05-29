@@ -4,6 +4,156 @@ This file is the quick run guide for the rubric. It tells you what already works
 
 Important: in PowerShell use `;` between commands, not `&&`.
 
+---
+
+## Demo final del examen — comandos exactos (copy / paste)
+
+Esta es la secuencia mínima para presentar al profesor: captura del flujo desde Open-Meteo, predicción del modelo en tiempo real y visualización en un dashboard live. Toma capturas de pantalla del navegador en cada paso.
+
+### Setup (una sola vez, si no lo has hecho ya)
+
+```powershell
+cd C:\StreamMetoData\StreamMetoData\Meteorisk
+python -m venv venv
+venv\Scripts\python.exe -m pip install -r requirements.txt
+```
+
+Verifica que el modelo ya esté entrenado:
+
+```powershell
+cd C:\StreamMetoData\StreamMetoData\Meteorisk
+dir models\weather_risk_model
+```
+
+Si la carpeta `models\weather_risk_model` está vacía, entrena el modelo primero (ver sección "Opcional · Entrenamiento" más abajo).
+
+### Demo mínima (3 terminales) — lo indispensable para el profesor
+
+Abre **3 terminales PowerShell**. En todas ejecuta primero `cd C:\StreamMetoData\StreamMetoData\Meteorisk`.
+
+**Terminal 1 — Kafka (broker de mensajes)**
+
+```powershell
+cd C:\StreamMetoData\StreamMetoData\Meteorisk
+docker compose up -d
+docker compose ps
+```
+
+Espera a ver el contenedor `Up`. No cierres esta terminal.
+
+**Terminal 2 — Productor (captura del flujo Open-Meteo → Kafka)**
+
+```powershell
+cd C:\StreamMetoData\StreamMetoData\Meteorisk
+venv\Scripts\python.exe producer.py
+```
+
+Verás logs como `Evento enviado -> {...}`. Déjalo corriendo. El modo `DEMO_MODE=True` inyecta anomalías cada 15/25/40 eventos para que se vean las tres clases (`normal`, `moderate`, `critical`) en el dashboard.
+
+**Terminal 3 — Dashboard en vivo (consume Kafka + clasifica en tiempo real)**
+
+```powershell
+cd C:\StreamMetoData\StreamMetoData\Meteorisk
+venv\Scripts\python.exe -m streamlit run live_dashboard.py
+```
+
+Abre el navegador en `http://localhost:8501`. Deberías ver:
+
+- Banner `🔴 LIVE` con "Última actualización: hace X s" (donde X < 5).
+- KPIs del último evento (temp, humedad, precip, viento) y un badge con la predicción de color.
+- Contadores acumulados `🟢 normal / 🟠 moderate / 🔴 critical`.
+- Mini-gráficas de temperatura y predicción a lo largo del tiempo.
+- Tabla con los últimos 15 eventos coloreada por nivel de riesgo.
+
+**Capturas recomendadas:** una con condición `normal`, una con `moderate` y una con `critical` (espera ~30 s para que entren las anomalías).
+
+### Demo completa (5 terminales) — incluye pipeline Spark + dashboard histórico
+
+Repite los pasos 1, 2 y 3 anteriores y añade:
+
+**Terminal 4 — Spark Structured Streaming (Kafka → Parquet procesado + agregados)**
+
+```powershell
+cd C:\StreamMetoData\StreamMetoData\Meteorisk
+spark-submit --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0 --conf spark.eventLog.enabled=true --conf spark.eventLog.dir=data\spark_events C:\StreamMetoData\StreamMetoData\Meteorisk\streaming.py
+```
+
+**Terminal 5a — Spark predict stream (Kafka → modelo MLlib → Parquet predicciones)**
+
+```powershell
+cd C:\StreamMetoData\StreamMetoData\Meteorisk
+spark-submit --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0 --conf spark.eventLog.enabled=true --conf spark.eventLog.dir=data\spark_events C:\StreamMetoData\StreamMetoData\Meteorisk\predict_stream.py
+```
+
+**Terminal 5b — Dashboard histórico de Streamlit (puerto distinto: 8502)**
+
+```powershell
+cd C:\StreamMetoData\StreamMetoData\Meteorisk
+venv\Scripts\python.exe -m streamlit run dashboard.py --server.port 8502
+```
+
+Abre `http://localhost:8502` (vista histórica con series temporales, agregados por ventana de 1 min y métricas del modelo) en paralelo con `http://localhost:8501` (vista live).
+
+### Opcional · Spark UI para capturas del rubric
+
+Para tener el History Server activo y poder capturar Jobs / Stages / Streaming:
+
+```powershell
+cd C:\StreamMetoData\StreamMetoData\Meteorisk
+md data\spark_events -ErrorAction SilentlyContinue
+spark-class org.apache.spark.deploy.history.HistoryServer --logDirectory "data\spark_events"
+```
+
+Abre `http://localhost:18080` (persistente) o `http://localhost:4040` (mientras un job corre).
+
+### Opcional · Entrenamiento (solo si `models\weather_risk_model` está vacío)
+
+Necesitas que hayan corrido `producer.py` + `streaming.py` un par de minutos para tener datos en `data\processed\`. Luego:
+
+```powershell
+cd C:\StreamMetoData\StreamMetoData\Meteorisk
+spark-submit --conf spark.eventLog.enabled=true --conf spark.eventLog.dir=data\spark_events C:\StreamMetoData\StreamMetoData\Meteorisk\train_model.py
+```
+
+Las métricas quedan en `data\metrics\model_metrics.csv` y el modelo en `models\weather_risk_model\`.
+
+### Opcional · Modo de carga para Spark UI metrics (≥4 k ev/s)
+
+En la terminal del productor, antes de arrancarlo:
+
+```powershell
+cd C:\StreamMetoData\StreamMetoData\Meteorisk
+$env:LOAD_TEST_MODE = "true"
+$env:LOAD_TEST_RATE = "5000"
+$env:LOAD_TEST_DURATION = "300"
+$env:LOAD_TEST_ANOMALY_PROB = "0.05"
+venv\Scripts\python.exe producer.py
+```
+
+El resultado del load test se guarda en `data\metrics\load_test_result.csv`.
+
+### Cierre limpio (al terminar la demo)
+
+1. `Ctrl+C` en cada terminal de Streamlit, Spark y producer (en ese orden).
+2. Apagar Kafka:
+
+```powershell
+cd C:\StreamMetoData\StreamMetoData\Meteorisk
+docker compose down
+```
+
+### Capturas a entregar (sugerencia)
+
+Guarda los `.png` en `docs\screenshots\` (créala si no existe):
+
+- `01_live_normal.png` — `live_dashboard.py` mostrando condición normal (verde).
+- `02_live_moderate.png` — banner naranja por anomalía moderada.
+- `03_live_critical.png` — banner rojo con riesgo crítico.
+- `04_dashboard_historico.png` — `dashboard.py` con series temporales y métricas del modelo.
+- `05_spark_ui_streaming.png` — pestaña "Streaming" del Spark UI con input/processing rate.
+
+---
+
 ## What is already working
 
 - Data origin is simulated / near real time: `producer.py` reads Open-Meteo and publishes weather events to Kafka, and it also supports synthetic load mode for stress testing.
